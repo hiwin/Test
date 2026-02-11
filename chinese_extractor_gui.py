@@ -9,21 +9,24 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext
 
 
-def to_simplified(text: str) -> str:
-    """将文本尽可能转换为简体中文（优先 OpenCC，其次 HanziConv）。"""
+def convert_chinese(text: str, mode: str = "t2s") -> str:
+    """简繁转换：mode=t2s(繁->简) 或 s2t(简->繁)，无依赖时原样返回。"""
     try:
         from opencc import OpenCC  # type: ignore
 
-        return OpenCC("t2s").convert(text)
+        return OpenCC(mode).convert(text)
     except Exception:
         pass
 
     try:
         from hanziconv import HanziConv  # type: ignore
 
-        return HanziConv.toSimplified(text)
+        if mode == "t2s":
+            return HanziConv.toSimplified(text)
+        if mode == "s2t":
+            return HanziConv.toTraditional(text)
+        return text
     except Exception:
-        # 环境中没有简繁转换库时，回退为原文。
         return text
 
 
@@ -43,70 +46,185 @@ def extract_chinese_text(raw_text: str) -> str:
         if re.fullmatch(r"\([^\u4e00-\u9fff]*\)", line):
             continue
 
-        # 仅处理“序号.正文”样式，自动去掉序号
+        # 去掉“序号.正文”样式中的序号
         line = re.sub(r"^\s*\d+\s*[\.、]\s*", "", line)
 
         # 去除括号内容（中英文括号都支持）
         line = re.sub(r"\([^)]*\)", "", line)
         line = re.sub(r"（[^）]*）", "", line)
 
-        # 保留中文、中文标点及常见空白
+        # 保留中文、中文标点、英文数字（避免 AI/20 被截断）
         filtered = re.findall(r"[\u4e00-\u9fffA-Za-z0-9，。！？；：、“”‘’《》【】（）—…·\s]+", line)
         text = "".join(filtered).strip()
 
         if text:
             result_parts.append(text)
 
-    merged = "".join(result_parts)
-    return to_simplified(merged)
+    return "".join(result_parts)
 
 
 class ExtractorApp:
+    BG = "#0b1220"
+    PANEL = "#111a2b"
+    FG = "#dbeafe"
+    ACCENT = "#2563eb"
+    INPUT_BG = "#0f172a"
+
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("中文提取并转简体工具")
-        self.root.geometry("900x680")
+        self.root.title("中文提取 + 简繁转换工具")
+        self.root.geometry("960x720")
+        self.root.configure(bg=self.BG)
+
+        self.convert_mode = tk.StringVar(value="t2s")
 
         title = tk.Label(
             root,
-            text="粘贴原文后，提取序号后中文并导出 TXT",
+            text="上传 / 粘贴文本后，提取序号后中文并导出 TXT",
             font=("Microsoft YaHei", 14, "bold"),
+            bg=self.BG,
+            fg=self.FG,
         )
-        title.pack(pady=8)
+        title.pack(pady=10)
 
-        input_label = tk.Label(root, text="输入原始文本：", anchor="w")
-        input_label.pack(fill="x", padx=12)
+        top_frame = tk.Frame(root, bg=self.BG)
+        top_frame.pack(fill="x", padx=12)
 
-        self.input_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, height=16)
+        load_btn = tk.Button(
+            top_frame,
+            text="上传 TXT",
+            command=self.load_txt,
+            bg=self.ACCENT,
+            fg="white",
+            activebackground="#1d4ed8",
+            activeforeground="white",
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+        )
+        load_btn.pack(side="left")
+
+        mode_frame = tk.Frame(top_frame, bg=self.BG)
+        mode_frame.pack(side="left", padx=16)
+        tk.Label(mode_frame, text="转换方向：", bg=self.BG, fg=self.FG).pack(side="left")
+        tk.Radiobutton(
+            mode_frame,
+            text="繁体→简体",
+            variable=self.convert_mode,
+            value="t2s",
+            bg=self.BG,
+            fg=self.FG,
+            selectcolor=self.PANEL,
+            activebackground=self.BG,
+            activeforeground=self.FG,
+        ).pack(side="left")
+        tk.Radiobutton(
+            mode_frame,
+            text="简体→繁体",
+            variable=self.convert_mode,
+            value="s2t",
+            bg=self.BG,
+            fg=self.FG,
+            selectcolor=self.PANEL,
+            activebackground=self.BG,
+            activeforeground=self.FG,
+        ).pack(side="left")
+
+        input_label = tk.Label(root, text="输入原始文本：", anchor="w", bg=self.BG, fg=self.FG)
+        input_label.pack(fill="x", padx=12, pady=(10, 0))
+
+        self.input_text = scrolledtext.ScrolledText(
+            root,
+            wrap=tk.WORD,
+            height=15,
+            bg=self.INPUT_BG,
+            fg=self.FG,
+            insertbackground=self.FG,
+            relief=tk.FLAT,
+        )
         self.input_text.pack(fill="both", expand=True, padx=12, pady=6)
 
-        button_frame = tk.Frame(root)
+        button_frame = tk.Frame(root, bg=self.BG)
         button_frame.pack(fill="x", padx=12, pady=6)
 
-        extract_btn = tk.Button(button_frame, text="提取并转换", command=self.extract)
+        extract_btn = tk.Button(
+            button_frame,
+            text="提取并转换",
+            command=self.extract,
+            bg=self.ACCENT,
+            fg="white",
+            activebackground="#1d4ed8",
+            activeforeground="white",
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+        )
         extract_btn.pack(side="left")
 
-        save_btn = tk.Button(button_frame, text="导出 TXT", command=self.save_txt)
+        save_btn = tk.Button(
+            button_frame,
+            text="导出 TXT",
+            command=self.save_txt,
+            bg="#1e293b",
+            fg=self.FG,
+            activebackground="#334155",
+            activeforeground=self.FG,
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+        )
         save_btn.pack(side="left", padx=8)
 
-        clear_btn = tk.Button(button_frame, text="清空", command=self.clear)
+        clear_btn = tk.Button(
+            button_frame,
+            text="清空",
+            command=self.clear,
+            bg="#1e293b",
+            fg=self.FG,
+            activebackground="#334155",
+            activeforeground=self.FG,
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+        )
         clear_btn.pack(side="left")
 
-        output_label = tk.Label(root, text="输出结果：", anchor="w")
+        output_label = tk.Label(root, text="输出结果：", anchor="w", bg=self.BG, fg=self.FG)
         output_label.pack(fill="x", padx=12)
 
-        self.output_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, height=12)
+        self.output_text = scrolledtext.ScrolledText(
+            root,
+            wrap=tk.WORD,
+            height=12,
+            bg=self.INPUT_BG,
+            fg=self.FG,
+            insertbackground=self.FG,
+            relief=tk.FLAT,
+        )
         self.output_text.pack(fill="both", expand=True, padx=12, pady=(6, 12))
 
         hint = (
-            "说明：支持多段不同序号。会自动去掉序号和括号内容，保留中文标点，"
-            "并将所有段落连贯拼接。"
+            "说明：支持可变段落数量；自动去序号与括号内容；保留中文标点；"
+            "可选择繁转简或简转繁。"
         )
-        tk.Label(root, text=hint, fg="#666").pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(root, text=hint, fg="#93c5fd", bg=self.BG).pack(fill="x", padx=12, pady=(0, 8))
+
+    def load_txt(self) -> None:
+        path = filedialog.askopenfilename(
+            title="选择 TXT 文件",
+            filetypes=[("Text File", "*.txt"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+
+        content = Path(path).read_text(encoding="utf-8", errors="ignore")
+        self.input_text.delete("1.0", tk.END)
+        self.input_text.insert(tk.END, content)
 
     def extract(self) -> None:
         raw = self.input_text.get("1.0", tk.END)
-        result = extract_chinese_text(raw)
+        extracted = extract_chinese_text(raw)
+        result = convert_chinese(extracted, self.convert_mode.get())
 
         self.output_text.delete("1.0", tk.END)
         self.output_text.insert(tk.END, result)
